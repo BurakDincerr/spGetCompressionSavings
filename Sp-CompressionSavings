@@ -1,0 +1,84 @@
+CREATE OR ALTER PROCEDURE spGetCompressionSavings
+@argDatabaseName varchar(128), -- Your DB name
+@argCompressionType nvarchar(60) -- 'PAGE' OR 'ROW' 
+AS
+BEGIN
+
+	 DECLARE	
+	 @SchemaName sysname,               
+     @TableName sysname ,     
+     @IndexID int,
+	 @lcSQL NVARCHAR(MAX),
+	 @lcSQL1 NVARCHAR(MAX)
+
+
+		DROP TABLE IF EXISTS #TempGetCompSizes
+			CREATE TABLE #TempGetCompSizes (
+		
+	   object_name varchar(128),
+	   schema_name	varchar(128),
+	   index_id int,
+	   partition_number	int,
+	   [size_with_current_compression_setting(KB)] int,	
+	   [size_with_requested_compression_setting(KB)]	int,	
+	   [sample_size_with_current_compression_setting(KB)]	int,	
+	   [sample_size_with_requested_compression_setting(KB)] int  )
+
+	   DROP TABLE IF EXISTS #GetinfoTable
+	   CREATE  TABLE #GetinfoTable(TableName varchar(128),SchemaName varchar(128), index_id int)
+	   SET @lcSQL1 = 'SELECT ST.name,SS.name,İ.index_id from '+@argDatabaseName+'.sys.tables ST
+
+			INNER JOIN '+@argDatabaseName+'.sys.schemas ss ON SS.schema_id = st.schema_id
+				INNER JOIN '+@argDatabaseName+'.sys.indexes i ON İ.object_id = ST.object_id
+  				 where ST.type =''U'' OPTION (RECOMPILE);'
+	   
+	   INSERT INTO #GetinfoTable
+	   EXEC (@lcSQL1)
+
+	
+     DECLARE curGetCompressionSavings CURSOR FAST_FORWARD
+      FOR
+		SELECT 	TableName,SchemaName,index_id FROM #GetinfoTable
+		
+ 
+    OPEN curGetCompressionSavings;
+ 
+    FETCH NEXT FROM curGetCompressionSavings INTO @TableName,@SchemaName, @IndexID;
+
+    -- Loop through every index in the table and run sp_estimate_data_compression_savings
+    WHILE @@FETCH_STATUS = 0
+        BEGIN
+            
+			 
+        set  @lcSQL ='  USE '+QUOTENAME(@argDatabasename)+'        EXEC dbo.sp_estimate_data_compression_savings @argSchemaName, @argTableName, @argIndexID, @argpartitionNumber, @argCompressionnType '
+	
+		
+	
+
+	INSERT INTO #TempGetCompSizes
+  execute sp_executeSQL @lcSQL ,N'@argSchemaName nvarchar(128), @argTableName nvarchar(128), @argIndexID INT , @argpartitionNumber INT ,@argCompressionnType nvarchar(128)', 
+								@argSchemaName=@SchemaName,@argTableName=@TableName ,@argIndexID = @IndexID,@argpartitionNumber=NULL,@argCompressionnType = @argCompressionType
+
+
+
+
+					
+            FETCH NEXT
+            FROM curGetCompressionSavings
+            INTO @TableName,@SchemaName, @IndexID;
+        END
+    CLOSE curGetCompressionSavings;
+    DEALLOCATE curGetCompressionSavings;
+
+
+
+
+
+	SELECT object_name, (sum([size_with_current_compression_setting(KB)]) - sum([size_with_requested_compression_setting(KB)]))/1024.0 AS Savings_in_MB FROM #TempGetCompSizes 
+		GROUP BY object_name
+			HAVING  (sum([size_with_current_compression_setting(KB)]) - sum([size_with_requested_compression_setting(KB)])) > 1000
+				ORDER BY Savings_in_MB desc
+
+	DROP TABLE #TempGetCompSizes
+	DROP TABLE #GetinfoTable
+END
